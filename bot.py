@@ -292,43 +292,55 @@ async def creer_commande(interaction, type_commande, nom_chaine, description, pr
 
 
 async def maj_tableau(guild, data):
-    """Met à jour (ou crée) le message tableau dans le salon privé."""
+    """Met à jour le tableau : un embed par commande, propre et lisible."""
     salon = guild.get_channel(SALON_TABLEAU_ID)
-    if not salon:
+    if not salon or not data:
         return
 
-    if not data:
-        return
+    # Supprimer les anciens messages du bot dans ce salon
+    async for msg in salon.history(limit=100):
+        if msg.author == guild.me:
+            await msg.delete()
 
-    lines = []
-    lines.append("```")
-    lines.append(f"{'ID':<18} {'Type':<12} {'Chaîne':<20} {'Prix':<12} {'Livraison':<12} {'Statut':<18} {'Paiement'}")
-    lines.append("─" * 105)
-    for cmd in data.values():
-        prix_str = f"{cmd['prix_final']}€" if cmd["prix_final"] else f"~{cmd['prix_estime']}€"
-        livraison = cmd["date_livraison"] or "À définir"
-        lines.append(
-            f"{cmd['id']:<18} {cmd['type']:<12} {cmd['nom_chaine'][:18]:<20} "
-            f"{prix_str:<12} {livraison:<12} {cmd['statut']:<18} {cmd['paiement']}"
-        )
-    lines.append("```")
-
-    tableau_text = "\n".join(lines)
-    embed = discord.Embed(
+    # En-tête
+    header = discord.Embed(
         title="📋 Tableau des commandes",
-        description=tableau_text,
+        description=f"**{len(data)} commande(s) au total** — mise à jour automatique",
         color=discord.Color.dark_blue(),
         timestamp=datetime.now()
     )
-    embed.set_footer(text="Dernière mise à jour")
+    header.set_footer(text="Dernière mise à jour")
+    await salon.send(embed=header)
 
-    # Chercher un message existant avec ce titre pour le modifier
-    async for msg in salon.history(limit=50):
-        if msg.author == guild.me and msg.embeds and "Tableau des commandes" in msg.embeds[0].title:
-            await msg.edit(embed=embed)
-            return
+    # Une carte par commande
+    for cmd in data.values():
+        prix_str = f"{cmd['prix_final']}€" if cmd["prix_final"] else f"~{cmd['prix_estime']}€"
+        livraison = cmd["date_livraison"] or "⏳ À définir"
 
-    await salon.send(embed=embed)
+        if cmd["statut"] == "✅ Terminé":
+            color = discord.Color.green()
+        elif cmd["statut"] == "❌ Annulé":
+            color = discord.Color.red()
+        elif cmd["statut"] == "⏳ En cours":
+            color = discord.Color.orange()
+        else:
+            color = discord.Color.blurple()
+
+        embed = discord.Embed(
+            title=f"{'🎨' if cmd['type'] == 'Miniature' else '🎬'} {cmd['type']} — `{cmd['id']}`",
+            color=color,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="👤 Client", value=f"<@{cmd['client_id']}>", inline=True)
+        embed.add_field(name="📺 Chaîne", value=cmd["nom_chaine"], inline=True)
+        embed.add_field(name="💰 Prix", value=prix_str, inline=True)
+        embed.add_field(name="📅 Livraison", value=livraison, inline=True)
+        embed.add_field(name="📌 Statut", value=cmd["statut"], inline=True)
+        embed.add_field(name="💳 Paiement", value=cmd["paiement"], inline=True)
+        embed.add_field(name="📝 Description", value=cmd["description"][:200], inline=False)
+        embed.set_footer(text=f"Commande passée le {cmd['date_commande']}")
+
+        await salon.send(embed=embed, view=BoutonsPrix(cmd["id"]))
 
 
 async def maj_planning(guild, data):
