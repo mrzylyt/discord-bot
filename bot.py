@@ -24,9 +24,6 @@ PRIX_MINI_PACK_4        = 99
 PRIX_MINI_PACK_8        = 179
 PRIX_MONTAGE_PAR_MINUTE = 3
 
-# ─────────────────────────────────────────────
-#  STOCKAGE JSON
-# ─────────────────────────────────────────────
 DATA_FILE = "commandes.json"
 
 def load_data():
@@ -39,16 +36,13 @@ def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ─────────────────────────────────────────────
-#  BOT
-# ─────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ─────────────────────────────────────────────
-#  MODALS COMMANDE CLIENT
+#  MENU CLIENT (boutons persistants)
 # ─────────────────────────────────────────────
 
 class MenuCommande(View):
@@ -91,14 +85,80 @@ class ModalMontage(Modal, title="Commander un Montage Vidéo"):
         except ValueError:
             await interaction.response.send_message("❌ Durée invalide, entre un nombre (ex: 10).", ephemeral=True)
             return
-        prix = round(duree_min * PRIX_MONTAGE_PAR_MINUTE, 2)
+        prix  = round(duree_min * PRIX_MONTAGE_PAR_MINUTE, 2)
         label = f"{prix}€ ({duree_min} min × {PRIX_MONTAGE_PAR_MINUTE}€/min)"
         await creer_commande(interaction, "Montage", self.nom_chaine.value, self.description.value, prix, label, duree=duree_min)
 
 
 # ─────────────────────────────────────────────
-#  MODAL PRIX & DÉLAI (ouvert via commande !prix)
+#  BOUTONS GESTION (dans #tableau-commandes)
+#  Le custom_id contient l'ID de la commande
 # ─────────────────────────────────────────────
+
+class BoutonsGestion(View):
+    """Boutons affichés sous chaque commande dans le tableau privé."""
+    def __init__(self, commande_id: str):
+        super().__init__(timeout=None)
+        self.commande_id = commande_id
+        # Bouton "Définir prix & délai"
+        btn_prix = Button(
+            label="💰 Prix & Délai",
+            style=discord.ButtonStyle.success,
+            custom_id=f"gestion_prix_{commande_id}"
+        )
+        btn_prix.callback = self.definir_prix
+        self.add_item(btn_prix)
+        # Bouton "Marquer terminé"
+        btn_done = Button(
+            label="✅ Terminé",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"gestion_done_{commande_id}"
+        )
+        btn_done.callback = self.marquer_termine
+        self.add_item(btn_done)
+        # Bouton "Annuler"
+        btn_cancel = Button(
+            label="❌ Annuler",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"gestion_cancel_{commande_id}"
+        )
+        btn_cancel.callback = self.annuler
+        self.add_item(btn_cancel)
+        # Bouton "Fermer salon"
+        btn_fermer = Button(
+            label="🔒 Fermer salon",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"gestion_fermer_{commande_id}"
+        )
+        btn_fermer.callback = self.fermer_salon
+        self.add_item(btn_fermer)
+
+    async def definir_prix(self, interaction: discord.Interaction):
+        if interaction.user.id != TON_ID:
+            await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
+            return
+        await interaction.response.send_modal(ModalPrixDelai(self.commande_id))
+
+    async def marquer_termine(self, interaction: discord.Interaction):
+        if interaction.user.id != TON_ID:
+            await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
+            return
+        await action_statut(interaction, self.commande_id, "✅ Terminé")
+
+    async def annuler(self, interaction: discord.Interaction):
+        if interaction.user.id != TON_ID:
+            await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
+            return
+        await action_statut(interaction, self.commande_id, "❌ Annulé")
+
+    async def fermer_salon(self, interaction: discord.Interaction):
+        if interaction.user.id != TON_ID:
+            await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        await action_fermer(interaction.guild, self.commande_id)
+        await interaction.followup.send(f"✅ Salon fermé.", ephemeral=True)
+
 
 class ModalPrixDelai(Modal, title="Définir prix final & délai"):
     prix_final  = TextInput(label="Prix final (€)", placeholder="Ex: 25")
@@ -122,21 +182,63 @@ class ModalPrixDelai(Modal, title="Définir prix final & délai"):
             return
 
         commande = data[self.commande_id]
-        commande["prix_final"]    = prix
-        commande["delai_jours"]   = delai
-        commande["statut"]        = "⏳ En cours"
-        date_livraison            = datetime.now() + timedelta(days=delai)
+        commande["prix_final"]     = prix
+        commande["delai_jours"]    = delai
+        commande["statut"]         = "⏳ En cours"
+        date_livraison             = datetime.now() + timedelta(days=delai)
         commande["date_livraison"] = date_livraison.strftime("%d/%m/%Y")
         save_data(data)
 
-        await interaction.response.send_message("✅ Prix et délai enregistrés !", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ Prix **{prix}€** et délai **{delai} jours** enregistrés !", ephemeral=True
+        )
         await maj_tableau(interaction.guild, data)
         await maj_planning(interaction.guild, data)
         await envoyer_message_client(interaction.guild, commande, prix, delai, date_livraison)
 
 
 # ─────────────────────────────────────────────
-#  FONCTIONS PRINCIPALES
+#  ACTIONS PARTAGÉES
+# ─────────────────────────────────────────────
+
+async def action_statut(interaction, commande_id, nouveau_statut):
+    data = load_data()
+    if commande_id not in data:
+        await interaction.response.send_message("❌ Commande introuvable.", ephemeral=True)
+        return
+    data[commande_id]["statut"] = nouveau_statut
+    save_data(data)
+    await interaction.response.send_message(f"✅ Statut → **{nouveau_statut}**", ephemeral=True)
+    await maj_tableau(interaction.guild, data)
+    await maj_planning(interaction.guild, data)
+
+
+async def action_fermer(guild, commande_id):
+    data = load_data()
+    if commande_id not in data:
+        return
+    commande     = data[commande_id]
+    salon_client = bot.get_channel(commande["salon_client_id"]) if commande["salon_client_id"] else None
+    if salon_client:
+        client  = guild.get_member(commande["client_id"])
+        mention = client.mention if client else "Client"
+        embed   = discord.Embed(
+            title="🔒 Commande clôturée",
+            description="Cette commande est **terminée et archivée**.\nMerci pour ta confiance ! 🙏\n\n*Salon supprimé dans 10 secondes.*",
+            color=discord.Color.dark_grey()
+        )
+        await salon_client.send(f"{mention}", embed=embed)
+        await asyncio.sleep(10)
+        await salon_client.delete(reason=f"Commande {commande_id} clôturée")
+    data[commande_id]["statut"]          = "🔒 Clôturé"
+    data[commande_id]["salon_client_id"] = None
+    save_data(data)
+    await maj_tableau(guild, data)
+    await maj_planning(guild, data)
+
+
+# ─────────────────────────────────────────────
+#  CRÉER UNE COMMANDE
 # ─────────────────────────────────────────────
 
 async def creer_commande(interaction, type_commande, nom_chaine, description, prix, label_prix, duree=None):
@@ -145,9 +247,8 @@ async def creer_commande(interaction, type_commande, nom_chaine, description, pr
 
     commande_id = f"{type_commande[:4].upper()}-{int(datetime.now().timestamp())}"
 
-    # Salon privé client
     category = guild.get_channel(CATEGORY_CLIENTS_ID)
-    moi = guild.get_member(TON_ID)
+    moi      = guild.get_member(TON_ID)
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
         client:             discord.PermissionOverwrite(read_messages=True, send_messages=True),
@@ -161,25 +262,24 @@ async def creer_commande(interaction, type_commande, nom_chaine, description, pr
         overwrites=overwrites
     )
 
-    # Sauvegarde
     data = load_data()
     data[commande_id] = {
-        "id": commande_id,
-        "type": type_commande,
-        "client_id": client.id,
-        "client_nom": str(client),
-        "nom_chaine": nom_chaine,
-        "description": description,
-        "prix_estime": prix,
-        "label_prix": label_prix,
-        "duree": duree,
-        "prix_final": None,
-        "delai_jours": None,
+        "id":             commande_id,
+        "type":           type_commande,
+        "client_id":      client.id,
+        "client_nom":     str(client),
+        "nom_chaine":     nom_chaine,
+        "description":    description,
+        "prix_estime":    prix,
+        "label_prix":     label_prix,
+        "duree":          duree,
+        "prix_final":     None,
+        "delai_jours":    None,
         "date_livraison": None,
-        "statut": "🔔 Nouvelle",
+        "statut":         "🔔 Nouvelle",
         "salon_client_id": salon_client.id,
-        "date_commande": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "paiement": "⏳ En attente"
+        "date_commande":  datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "paiement":       "⏳ En attente"
     }
     save_data(data)
 
@@ -188,29 +288,21 @@ async def creer_commande(interaction, type_commande, nom_chaine, description, pr
         ephemeral=True
     )
 
-    # Message client dans son salon
+    # Message dans le salon client
     embed_client = discord.Embed(title=f"📦 Commande {type_commande} — {commande_id}", color=discord.Color.blue())
-    embed_client.add_field(name="👤 Client",      value=client.mention, inline=True)
-    embed_client.add_field(name="📺 Chaîne",      value=nom_chaine,     inline=True)
-    embed_client.add_field(name="💰 Tarif estimé",value=label_prix,     inline=True)
-    embed_client.add_field(name="📝 Description", value=description,    inline=False)
+    embed_client.add_field(name="👤 Client",       value=client.mention, inline=True)
+    embed_client.add_field(name="📺 Chaîne",       value=nom_chaine,     inline=True)
+    embed_client.add_field(name="💰 Tarif estimé", value=label_prix,     inline=True)
+    embed_client.add_field(name="📝 Description",  value=description,    inline=False)
     embed_client.set_footer(text="Le créateur va confirmer le prix final et le délai !")
     await salon_client.send(f"Bonjour {client.mention} ! 👋", embed=embed_client)
 
-    # Notif dans tableau privé — boutons via commandes !
-    salon_tableau = guild.get_channel(SALON_TABLEAU_ID)
-    if salon_tableau:
-        embed_notif = discord.Embed(title=f"🔔 Nouvelle commande — {commande_id}", color=discord.Color.orange())
-        embed_notif.add_field(name="Type",         value=type_commande,                      inline=True)
-        embed_notif.add_field(name="Client",       value=f"{client.mention} ({nom_chaine})", inline=True)
-        embed_notif.add_field(name="Prix estimé",  value=label_prix,                         inline=True)
-        embed_notif.add_field(name="Description",  value=description,                        inline=False)
-        embed_notif.add_field(name="Salon client", value=salon_client.mention,               inline=True)
-        embed_notif.set_footer(text=f"Utilise !prix {commande_id} [prix] [jours] pour confirmer")
-        await salon_tableau.send(embed=embed_notif)
-
     await maj_tableau(guild, data)
 
+
+# ─────────────────────────────────────────────
+#  TABLEAU & PLANNING
+# ─────────────────────────────────────────────
 
 async def maj_tableau(guild, data):
     salon = guild.get_channel(SALON_TABLEAU_ID)
@@ -224,12 +316,13 @@ async def maj_tableau(guild, data):
 
     header = discord.Embed(
         title="📋 Tableau des commandes",
-        description=f"**{len(data)} commande(s)** — utilisez les commandes `!prix`, `!livrer`, `!paiement`, `!fermer`",
+        description=f"**{len(data)} commande(s)** — clique sur les boutons pour gérer",
         color=discord.Color.dark_blue(),
         timestamp=datetime.now()
     )
     header.set_footer(text="Dernière mise à jour")
     await salon.send(embed=header)
+    await asyncio.sleep(0.3)
 
     for cmd in data.values():
         prix_str  = f"{cmd['prix_final']}€" if cmd["prix_final"] else f"~{cmd['prix_estime']}€"
@@ -237,7 +330,7 @@ async def maj_tableau(guild, data):
 
         if cmd["statut"] == "✅ Terminé":
             color = discord.Color.green()
-        elif cmd["statut"] == "❌ Annulé":
+        elif cmd["statut"] in ("❌ Annulé", "🔒 Clôturé"):
             color = discord.Color.red()
         elif cmd["statut"] == "⏳ En cours":
             color = discord.Color.orange()
@@ -249,15 +342,20 @@ async def maj_tableau(guild, data):
             color=color,
             timestamp=datetime.now()
         )
-        embed.add_field(name="👤 Client",    value=f"<@{cmd['client_id']}>",  inline=True)
-        embed.add_field(name="📺 Chaîne",    value=cmd["nom_chaine"],          inline=True)
-        embed.add_field(name="💰 Prix",      value=prix_str,                   inline=True)
-        embed.add_field(name="📅 Livraison", value=livraison,                  inline=True)
-        embed.add_field(name="📌 Statut",    value=cmd["statut"],              inline=True)
-        embed.add_field(name="💳 Paiement",  value=cmd["paiement"],            inline=True)
-        embed.add_field(name="📝 Description", value=cmd["description"][:200], inline=False)
+        embed.add_field(name="👤 Client",      value=f"<@{cmd['client_id']}>",   inline=True)
+        embed.add_field(name="📺 Chaîne",      value=cmd["nom_chaine"],           inline=True)
+        embed.add_field(name="💰 Prix",        value=prix_str,                    inline=True)
+        embed.add_field(name="📅 Livraison",   value=livraison,                   inline=True)
+        embed.add_field(name="📌 Statut",      value=cmd["statut"],               inline=True)
+        embed.add_field(name="💳 Paiement",    value=cmd["paiement"],             inline=True)
+        embed.add_field(name="📝 Description", value=cmd["description"][:200],    inline=False)
         embed.set_footer(text=f"Commande le {cmd['date_commande']}")
-        await salon.send(embed=embed)
+
+        # Boutons seulement pour les commandes non clôturées
+        if cmd["statut"] not in ("🔒 Clôturé", "❌ Annulé"):
+            await salon.send(embed=embed, view=BoutonsGestion(cmd["id"]))
+        else:
+            await salon.send(embed=embed)
         await asyncio.sleep(0.3)
 
 
@@ -266,7 +364,7 @@ async def maj_planning(guild, data):
     if not salon:
         return
 
-    actives = [c for c in data.values() if c["statut"] not in ("✅ Terminé", "❌ Annulé") and c["date_livraison"]]
+    actives = [c for c in data.values() if c["statut"] not in ("✅ Terminé", "❌ Annulé", "🔒 Clôturé") and c["date_livraison"]]
     actives.sort(key=lambda x: datetime.strptime(x["date_livraison"], "%d/%m/%Y"))
 
     embed = discord.Embed(title="📅 Planning de livraison", color=discord.Color.green(), timestamp=datetime.now())
@@ -298,15 +396,14 @@ async def envoyer_message_client(guild, commande, prix, delai, date_livraison):
     salon = guild.get_channel(commande["salon_client_id"])
     if not salon:
         return
-
     acompte = round(prix / 2, 2)
     client  = guild.get_member(commande["client_id"])
     mention = client.mention if client else "Client"
 
     embed = discord.Embed(title="💰 Confirmation de ta commande", color=discord.Color.gold())
-    embed.add_field(name="📦 Type",   value=commande["type"],                    inline=True)
-    embed.add_field(name="💵 Total",  value=f"**{prix}€**",                      inline=True)
-    embed.add_field(name="📅 Livraison", value=date_livraison.strftime("%d/%m/%Y"), inline=True)
+    embed.add_field(name="📦 Type",      value=commande["type"],                       inline=True)
+    embed.add_field(name="💵 Total",     value=f"**{prix}€**",                         inline=True)
+    embed.add_field(name="📅 Livraison", value=date_livraison.strftime("%d/%m/%Y"),    inline=True)
     embed.add_field(
         name="💳 Acompte à payer maintenant",
         value=f"**{acompte}€** (50% du total)\nSolde restant à la livraison : **{acompte}€**",
@@ -322,15 +419,16 @@ async def envoyer_message_client(guild, commande, prix, delai, date_livraison):
 
 
 # ─────────────────────────────────────────────
-#  COMMANDES (toutes réservées à TON_ID)
+#  COMMANDES TEXTE
 # ─────────────────────────────────────────────
 
 def check_owner(ctx):
     return ctx.author.id == TON_ID
 
+
 @bot.command()
 async def setup(ctx):
-    """!setup — Envoie le menu dans #commandes (une seule fois)"""
+    """!setup — Envoie le menu dans #commandes"""
     if not check_owner(ctx): return
     salon = bot.get_channel(SALON_COMMANDE_ID)
     if not salon:
@@ -357,7 +455,7 @@ async def setup(ctx):
 
 @bot.command()
 async def prix(ctx, commande_id: str, prix_val: str, delai_val: str):
-    """!prix COMMANDE_ID PRIX JOURS — Définit le prix et le délai"""
+    """!prix COMMANDE_ID PRIX JOURS"""
     if not check_owner(ctx): return
     try:
         p = float(prix_val.replace(",", "."))
@@ -365,12 +463,10 @@ async def prix(ctx, commande_id: str, prix_val: str, delai_val: str):
     except ValueError:
         await ctx.send("❌ Usage : `!prix MINI-123 25 3`")
         return
-
     data = load_data()
     if commande_id not in data:
         await ctx.send(f"❌ Commande `{commande_id}` introuvable.")
         return
-
     commande = data[commande_id]
     commande["prix_final"]     = p
     commande["delai_jours"]    = d
@@ -378,8 +474,7 @@ async def prix(ctx, commande_id: str, prix_val: str, delai_val: str):
     date_livraison             = datetime.now() + timedelta(days=d)
     commande["date_livraison"] = date_livraison.strftime("%d/%m/%Y")
     save_data(data)
-
-    await ctx.send(f"✅ `{commande_id}` → Prix : **{p}€** | Livraison : **{date_livraison.strftime('%d/%m/%Y')}**")
+    await ctx.send(f"✅ `{commande_id}` → **{p}€** | Livraison : **{date_livraison.strftime('%d/%m/%Y')}**")
     await maj_tableau(ctx.guild, data)
     await maj_planning(ctx.guild, data)
     await envoyer_message_client(ctx.guild, commande, p, d, date_livraison)
@@ -387,23 +482,20 @@ async def prix(ctx, commande_id: str, prix_val: str, delai_val: str):
 
 @bot.command()
 async def livrer(ctx, commande_id: str):
-    """!livrer COMMANDE_ID — Prévient le client que c'est prêt"""
+    """!livrer COMMANDE_ID"""
     if not check_owner(ctx): return
     data = load_data()
     if commande_id not in data:
         await ctx.send("❌ Commande introuvable.")
         return
-
     commande = data[commande_id]
     salon    = bot.get_channel(commande["salon_client_id"])
     if not salon:
         await ctx.send("❌ Salon client introuvable.")
         return
-
     client  = ctx.guild.get_member(commande["client_id"])
     mention = client.mention if client else "Client"
     acompte = round((commande["prix_final"] or commande["prix_estime"]) / 2, 2)
-
     embed = discord.Embed(
         title="🎉 Ta commande est prête !",
         description=(
@@ -416,7 +508,6 @@ async def livrer(ctx, commande_id: str):
         color=discord.Color.green()
     )
     await salon.send(f"{mention}", embed=embed)
-
     data[commande_id]["statut"] = "📬 Livraison en attente"
     save_data(data)
     await maj_tableau(ctx.guild, data)
@@ -432,27 +523,21 @@ async def paiement(ctx, commande_id: str, type_paiement: str = "solde"):
     if commande_id not in data:
         await ctx.send("❌ Commande introuvable.")
         return
-
     if "acompte" in type_paiement.lower():
         data[commande_id]["paiement"] = "✅ Acompte reçu"
         msg = "Acompte enregistré !"
+        msg_client = "✅ Acompte reçu, ta commande est lancée ! 🚀"
     else:
         data[commande_id]["paiement"] = "✅ Payé intégralement"
         data[commande_id]["statut"]   = "✅ Terminé"
-        msg = "Paiement complet enregistré, commande terminée !"
-
+        msg = "Paiement complet, commande terminée !"
+        msg_client = "✅ Paiement complet reçu, merci ! Le fichier final arrive 🎁"
     save_data(data)
-
-    # Notifier le client
-    salon_client = bot.get_channel(data[commande_id]["salon_client_id"])
+    salon_client = bot.get_channel(data[commande_id]["salon_client_id"]) if data[commande_id]["salon_client_id"] else None
     if salon_client:
         client  = ctx.guild.get_member(data[commande_id]["client_id"])
         mention = client.mention if client else "Client"
-        if "acompte" in type_paiement.lower():
-            await salon_client.send(f"{mention} ✅ Acompte reçu, ta commande est lancée ! 🚀")
-        else:
-            await salon_client.send(f"{mention} ✅ Paiement complet reçu, merci ! Le fichier final arrive. 🎁")
-
+        await salon_client.send(f"{mention} {msg_client}")
     await maj_tableau(ctx.guild, data)
     await maj_planning(ctx.guild, data)
     await ctx.send(f"✅ {msg}")
@@ -460,58 +545,28 @@ async def paiement(ctx, commande_id: str, type_paiement: str = "solde"):
 
 @bot.command()
 async def fermer(ctx, commande_id: str):
-    """!fermer COMMANDE_ID — Archive et supprime le salon client"""
+    """!fermer COMMANDE_ID — Supprime le salon client"""
     if not check_owner(ctx): return
-    data = load_data()
-    if commande_id not in data:
-        await ctx.send("❌ Commande introuvable.")
-        return
-
-    commande     = data[commande_id]
-    salon_client = bot.get_channel(commande["salon_client_id"])
-
-    if salon_client:
-        client  = ctx.guild.get_member(commande["client_id"])
-        mention = client.mention if client else "Client"
-        embed = discord.Embed(
-            title="🔒 Commande clôturée",
-            description=(
-                "Cette commande est maintenant **terminée et archivée**.\n"
-                "Merci pour ta confiance ! 🙏\n\n"
-                "*Ce salon sera supprimé dans 10 secondes.*"
-            ),
-            color=discord.Color.dark_grey()
-        )
-        await salon_client.send(f"{mention}", embed=embed)
-        await asyncio.sleep(10)
-        await salon_client.delete(reason=f"Commande {commande_id} clôturée")
-
-    data[commande_id]["statut"]           = "🔒 Clôturé"
-    data[commande_id]["salon_client_id"]  = None
-    save_data(data)
-
-    await maj_tableau(ctx.guild, data)
-    await maj_planning(ctx.guild, data)
-    await ctx.send(f"✅ Commande `{commande_id}` clôturée et salon supprimé.")
+    await action_fermer(ctx.guild, commande_id)
+    await ctx.send(f"✅ Commande `{commande_id}` clôturée.")
 
 
 @bot.command()
 async def commandes(ctx):
-    """!commandes — Liste toutes les commandes actives avec leurs IDs"""
+    """!commandes — Liste toutes les commandes"""
     if not check_owner(ctx): return
     data = load_data()
     if not data:
         await ctx.send("Aucune commande pour l'instant.")
         return
-
     embed = discord.Embed(title="📋 Liste des commandes", color=discord.Color.blurple())
     for cmd in data.values():
         embed.add_field(
             name=f"`{cmd['id']}` — {cmd['type']}",
-            value=f"📺 {cmd['nom_chaine']} | 📌 {cmd['statut']} | 💰 {cmd['prix_final'] or '~' + str(cmd['prix_estime'])}€",
+            value=f"📺 {cmd['nom_chaine']} | 📌 {cmd['statut']} | 💰 {cmd['prix_final'] or '~'+str(cmd['prix_estime'])}€",
             inline=False
         )
-    embed.set_footer(text="!prix ID PRIX JOURS | !livrer ID | !paiement ID | !fermer ID")
+    embed.set_footer(text="!prix ID PRIX JOURS | !livrer ID | !paiement ID acompte/solde | !fermer ID")
     await ctx.send(embed=embed)
 
 
