@@ -16,6 +16,7 @@ SALON_TABLEAU_ID    = 1512563357314715754
 SALON_PLANNING_ID   = 1512563459278241822
 TON_ID              = 1000860625968320604
 CATEGORY_CLIENTS_ID = 1512563641512362084
+SALON_PAIEMENTS_ID  = 1512828613207134401
 
 PAYPAL_EMAIL = "mrzylyt@gmail.com"
 
@@ -132,6 +133,22 @@ class BoutonsGestion(View):
         )
         btn_fermer.callback = self.fermer_salon
         self.add_item(btn_fermer)
+        # Bouton "Acompte reçu"
+        btn_acompte = Button(
+            label="💳 Acompte reçu",
+            style=discord.ButtonStyle.success,
+            custom_id=f"gestion_acompte_{commande_id}"
+        )
+        btn_acompte.callback = self.acompte_recu
+        self.add_item(btn_acompte)
+        # Bouton "Paiement final reçu"
+        btn_final = Button(
+            label="💵 Paiement final reçu",
+            style=discord.ButtonStyle.success,
+            custom_id=f"gestion_final_{commande_id}"
+        )
+        btn_final.callback = self.paiement_final
+        self.add_item(btn_final)
 
     async def definir_prix(self, interaction: discord.Interaction):
         if interaction.user.id != TON_ID:
@@ -158,6 +175,22 @@ class BoutonsGestion(View):
         await interaction.response.defer(ephemeral=True)
         await action_fermer(interaction.guild, self.commande_id)
         await interaction.followup.send(f"✅ Salon fermé.", ephemeral=True)
+
+    async def acompte_recu(self, interaction: discord.Interaction):
+        if interaction.user.id != TON_ID:
+            await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        await action_paiement(interaction.guild, self.commande_id, "acompte")
+        await interaction.followup.send("✅ Acompte enregistré !", ephemeral=True)
+
+    async def paiement_final(self, interaction: discord.Interaction):
+        if interaction.user.id != TON_ID:
+            await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        await action_paiement(interaction.guild, self.commande_id, "final")
+        await interaction.followup.send("✅ Paiement final enregistré !", ephemeral=True)
 
 
 class ModalPrixDelai(Modal, title="Définir prix final & délai"):
@@ -233,6 +266,54 @@ async def action_fermer(guild, commande_id):
     data[commande_id]["statut"]          = "🔒 Clôturé"
     data[commande_id]["salon_client_id"] = None
     save_data(data)
+    await maj_tableau(guild, data)
+    await maj_planning(guild, data)
+
+
+async def action_paiement(guild, commande_id, type_paiement):
+    data = load_data()
+    if commande_id not in data:
+        return
+    commande = data[commande_id]
+
+    if type_paiement == "acompte":
+        data[commande_id]["paiement"] = "✅ Acompte reçu"
+        montant = round((commande["prix_final"] or commande["prix_estime"]) / 2, 2)
+        label_paiement = f"Acompte — {montant}€"
+        msg_client = "✅ Acompte reçu, ta commande est lancée ! 🚀"
+    else:
+        data[commande_id]["paiement"] = "✅ Payé intégralement"
+        data[commande_id]["statut"]   = "✅ Terminé"
+        montant = round((commande["prix_final"] or commande["prix_estime"]) / 2, 2)
+        label_paiement = f"Paiement final — {montant}€"
+        msg_client = "✅ Paiement final reçu, merci ! Le fichier arrive bientôt 🎁"
+
+    save_data(data)
+
+    # Notifier le client dans son salon
+    salon_client = bot.get_channel(commande["salon_client_id"]) if commande["salon_client_id"] else None
+    if salon_client:
+        client  = guild.get_member(commande["client_id"])
+        mention = client.mention if client else "Client"
+        await salon_client.send(f"{mention} {msg_client}")
+
+    # Log dans #paiements-reçus
+    salon_paiements = guild.get_channel(SALON_PAIEMENTS_ID)
+    if salon_paiements:
+        embed = discord.Embed(
+            title="💰 Paiement reçu",
+            color=discord.Color.green(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="📦 Commande", value=f"`{commande_id}`",             inline=True)
+        embed.add_field(name="🎨 Type",     value=commande["type"],               inline=True)
+        embed.add_field(name="📺 Chaîne",   value=commande["nom_chaine"],         inline=True)
+        embed.add_field(name="👤 Client",   value=f"<@{commande['client_id']}>",  inline=True)
+        embed.add_field(name="💵 Montant",  value=f"**{montant}€**",              inline=True)
+        embed.add_field(name="📋 Type",     value=label_paiement,                 inline=True)
+        embed.set_footer(text=f"Reçu le {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
+        await salon_paiements.send(embed=embed)
+
     await maj_tableau(guild, data)
     await maj_planning(guild, data)
 
