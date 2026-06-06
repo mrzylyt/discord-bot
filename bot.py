@@ -173,7 +173,8 @@ class BoutonsGestion(View):
             await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        await action_fermer(interaction.guild, self.commande_id)
+        guild = interaction.guild or bot.get_guild(interaction.guild_id)
+        await action_fermer(guild, self.commande_id)
         await interaction.followup.send(f"✅ Salon fermé.", ephemeral=True)
 
     async def acompte_recu(self, interaction: discord.Interaction):
@@ -181,7 +182,8 @@ class BoutonsGestion(View):
             await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        await action_paiement(interaction.guild, self.commande_id, "acompte")
+        guild = interaction.guild or bot.get_guild(interaction.guild_id)
+        await action_paiement(guild, self.commande_id, "acompte")
         await interaction.followup.send("✅ Acompte enregistré !", ephemeral=True)
 
     async def paiement_final(self, interaction: discord.Interaction):
@@ -189,7 +191,8 @@ class BoutonsGestion(View):
             await interaction.response.send_message("❌ Réservé au créateur.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        await action_paiement(interaction.guild, self.commande_id, "final")
+        guild = interaction.guild or bot.get_guild(interaction.guild_id)
+        await action_paiement(guild, self.commande_id, "final")
         await interaction.followup.send("✅ Paiement final enregistré !", ephemeral=True)
 
 
@@ -225,9 +228,12 @@ class ModalPrixDelai(Modal, title="Définir prix final & délai"):
         await interaction.response.send_message(
             f"✅ Prix **{prix}€** et délai **{delai} jours** enregistrés !", ephemeral=True
         )
-        await maj_tableau(interaction.guild, data)
-        await maj_planning(interaction.guild, data)
-        await envoyer_message_client(interaction.guild, commande, prix, delai, date_livraison)
+        # Récupère le guild via bot car interaction.guild peut être None depuis un modal
+        guild = interaction.guild or bot.get_guild(interaction.guild_id)
+        if guild:
+            await maj_tableau(guild, data)
+            await maj_planning(guild, data)
+            await envoyer_message_client(guild, commande, prix, delai, date_livraison)
 
 
 # ─────────────────────────────────────────────
@@ -242,8 +248,9 @@ async def action_statut(interaction, commande_id, nouveau_statut):
     data[commande_id]["statut"] = nouveau_statut
     save_data(data)
     await interaction.response.send_message(f"✅ Statut → **{nouveau_statut}**", ephemeral=True)
-    await maj_tableau(interaction.guild, data)
-    await maj_planning(interaction.guild, data)
+    guild = interaction.guild or bot.get_guild(interaction.guild_id)
+    await maj_tableau(guild, data)
+    await maj_planning(guild, data)
 
 
 async def action_fermer(guild, commande_id):
@@ -323,7 +330,7 @@ async def action_paiement(guild, commande_id, type_paiement):
 # ─────────────────────────────────────────────
 
 async def creer_commande(interaction, type_commande, nom_chaine, description, prix, label_prix, duree=None):
-    guild  = interaction.guild
+    guild  = interaction.guild or bot.get_guild(interaction.guild_id)
     client = interaction.user
 
     commande_id = f"{type_commande[:4].upper()}-{int(datetime.now().timestamp())}"
