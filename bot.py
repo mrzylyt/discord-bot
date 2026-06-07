@@ -15,7 +15,9 @@ SALON_COMMANDE_ID   = 1512563280919400628
 SALON_TABLEAU_ID    = 1512563357314715754
 SALON_PLANNING_ID   = 1512563459278241822
 TON_ID              = 1000860625968320604
-CATEGORY_CLIENTS_ID = 1512563641512362084
+CATEGORY_CLIENTS_ID  = 1512563641512362084
+SALON_REGLEMENT_ID   = 1512823100394176543
+ROLE_NON_VERIFIE_ID  = 1513146382830141592
 SALON_PAIEMENTS_ID  = 1512828613207134401
 
 PAYPAL_EMAIL = "mrzylyt@gmail.com"
@@ -45,6 +47,29 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ─────────────────────────────────────────────
 #  MENU CLIENT (boutons persistants)
 # ─────────────────────────────────────────────
+
+class BoutonReglement(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✅  J'accepte le règlement", style=discord.ButtonStyle.success, custom_id="accepter_reglement")
+    async def accepter(self, interaction: discord.Interaction, button: Button):
+        guild  = interaction.guild or bot.get_guild(interaction.guild_id)
+        member = guild.get_member(interaction.user.id)
+        role   = guild.get_role(ROLE_NON_VERIFIE_ID)
+
+        if role and role in member.roles:
+            await member.remove_roles(role, reason="Règlement accepté")
+            await interaction.response.send_message(
+                "✅ Merci d'avoir accepté le règlement ! Tu as maintenant accès au serveur. Bienvenue ! 🎉",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "✅ Tu as déjà accepté le règlement !",
+                ephemeral=True
+            )
+
 
 class MenuCommande(View):
     def __init__(self):
@@ -658,6 +683,58 @@ async def commandes(ctx):
     await ctx.send(embed=embed)
 
 
+@bot.command()
+async def reglement(ctx):
+    """!reglement — Envoie le règlement avec bouton dans #règles"""
+    if not check_owner(ctx): return
+    salon = bot.get_channel(SALON_REGLEMENT_ID)
+    if not salon:
+        await ctx.send("❌ Salon règles introuvable.")
+        return
+
+    embed = discord.Embed(
+        title="📋 Règlement du serveur",
+        color=discord.Color.purple()
+    )
+    embed.description = (
+        "Bienvenue ! Avant d'accéder au serveur, lis et accepte les règles suivantes.
+​"
+    )
+    embed.add_field(
+        name="1️⃣ Respect",
+        value="Sois respectueux envers tout le monde. Aucune insulte, discrimination ou harcèlement toléré.",
+        inline=False
+    )
+    embed.add_field(
+        name="2️⃣ Commandes",
+        value="Toutes les commandes se font uniquement via <#1512563280919400628>. Ne contacte pas le créateur en DM pour commander.",
+        inline=False
+    )
+    embed.add_field(
+        name="3️⃣ Paiement",
+        value="L'acompte (50%) doit être payé pour lancer la commande. Aucun remboursement une fois le travail commencé. Paiement via PayPal uniquement.",
+        inline=False
+    )
+    embed.add_field(
+        name="4️⃣ Délais",
+        value="Les délais sont donnés à titre indicatif. Des modifications majeures en cours de route peuvent allonger le délai.",
+        inline=False
+    )
+    embed.add_field(
+        name="5️⃣ Droits",
+        value="Le créateur peut utiliser les créations dans son portfolio. Le client obtient les droits d'utilisation sur sa chaîne YouTube.",
+        inline=False
+    )
+    embed.add_field(
+        name="6️⃣ Comportement",
+        value="Pas de spam, pub ou contenu inapproprié. Restez dans les salons prévus à cet effet.",
+        inline=False
+    )
+    embed.set_footer(text="En cliquant sur le bouton ci-dessous, tu acceptes ces règles.")
+    await salon.send(embed=embed, view=BoutonReglement())
+    await ctx.message.delete()
+
+
 # ─────────────────────────────────────────────
 #  EVENTS
 # ─────────────────────────────────────────────
@@ -666,6 +743,7 @@ async def commandes(ctx):
 async def on_ready():
     print(f"✅ Bot connecté : {bot.user} ({bot.user.id})")
     bot.add_view(MenuCommande())
+    bot.add_view(BoutonReglement())
     print("📋 Views persistantes chargées.")
 
 
