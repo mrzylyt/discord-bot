@@ -696,10 +696,7 @@ async def reglement(ctx):
         title="📋 Règlement du serveur",
         color=discord.Color.purple()
     )
-    embed.description = (
-        "Bienvenue ! Avant d'accéder au serveur, lis et accepte les règles suivantes.
-​"
-    )
+    embed.description = "Bienvenue ! Avant d'accéder au serveur, lis et accepte les règles suivantes."
     embed.add_field(
         name="1️⃣ Respect",
         value="Sois respectueux envers tout le monde. Aucune insulte, discrimination ou harcèlement toléré.",
