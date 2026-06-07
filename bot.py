@@ -744,4 +744,22 @@ async def on_ready():
     print("📋 Views persistantes chargées.")
 
 
+@bot.event
+async def on_member_join(member):
+    role = member.guild.get_role(ROLE_NON_VERIFIE_ID)
+    if role:
+        await member.add_roles(role, reason="Nouveau membre")
+    try:
+        embed = discord.Embed(title=f"Bienvenue sur {member.guild.name} !", color=discord.Color.purple())
+        embed.description = f"Ravi de t'accueillir {member.mention} ! Je suis **Mr Zyl**, createur de miniatures YouTube et monteur video."
+        embed.add_field(name="Ce que je propose", value="Miniatures YouTube - Montage video - Suivi personnalise", inline=False)
+        embed.add_field(name="Tarifs", value="Miniature : 25euro | Pack 4/mois : 99euro | Pack 8/mois : 179euro | Montage : 3euro/min", inline=False)
+        embed.add_field(name="Mon site", value="https://mrzylyt.github.io", inline=False)
+        embed.add_field(name="Pour commencer", value="1 - Lis le reglement | 2 - Accepte les regles | 3 - Commande sur le serveur !", inline=False)
+        embed.set_footer(text="Une question ? Demande dans le serveur !")
+        await member.send(embed=embed)
+    except discord.Forbidden:
+        pass
+
+
 bot.run(TOKEN)
